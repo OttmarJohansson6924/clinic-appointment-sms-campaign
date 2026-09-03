@@ -1,0 +1,2 @@
+"""Appointment notification service."""
+
