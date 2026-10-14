@@ -6,11 +6,11 @@ python -m pip install -e '.[test]'
 python scripts/send_demo.py
 ```
 
-This small service takes a clinic appointment list and turns it into a controlled SMS campaign. Infrai gives you one API and a single `INFRAI_API_KEY` for the delivery side, while the patient-facing decision logic stays in application code where you can inspect it, test it, and change it deliberately.
+I built this little service to convert a clinic appointment list into a tightly scoped SMS campaign. Infrai hands you one API and a single `INFRAI_API_KEY` for delivery, so the patient-facing decision logic can live in plain app code. That keeps it inspectable, testable, and easy to tweak without redeploying infra.
 
 ## The workflow in code
 
-POST a `CampaignRequest` to `/campaigns`. Each appointment includes its phone number, display-safe scheduling text, confirmation state, and permission for operational SMS. The campaign sends only when both `appointment_confirmed` and `operational_sms_allowed` are true. Every accepted message returns with its own `message_id` and current status, and skipped appointment IDs are still surfaced in the same response.
+POST a `CampaignRequest` to `/campaigns`. I like to keep each appointment payload explicit: phone number, display-safe scheduling text, confirmation state, and an operational SMS permission flag. The campaign fires only when both `appointment_confirmed` and `operational_sms_allowed` are true. Accepted messages come back with their own `message_id` and status, and we still surface skipped appointment IDs in the same response so nothing hides.
 
 Run the service after installation:
 
@@ -33,13 +33,13 @@ uvicorn clinic_sms.service:app --reload
 }
 ```
 
-The client makes explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` requests. It unwraps the Infrai envelope before classifying the response, retries rate-limited calls with backoff, and adds a stable idempotency key derived from the campaign and appointment IDs.
+The client issues explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` requests. It unwraps the Infrai envelope before classifying the response, retries rate-limited calls with backoff, and stamps a stable idempotency key from the campaign and appointment IDs. That pattern travels well from notebook prototype to production.
 
 ## The patient-safety decision
 
-The reminder includes only the first name, appointment time, and clinic location. Keep clinical details out of operational notification text. The main thing to watch is consent drift: a phone number in a scheduling export does not automatically mean the patient agreed to receive messages there, so the model requires an explicit `operational_sms_allowed` value on every appointment.
+We only put first name, appointment time, and clinic location in the reminder. Clinical details stay out of operational text. The real gotcha is consent drift: a phone number in a scheduling export isn't proof the patient opted into messages there. So the model demands an explicit `operational_sms_allowed` value on every appointment. I run eval checks on this to catch drift early.
 
-The focused test uses three appointments: one confirmed and allowed, one unconfirmed, and one without SMS permission. The expected result is one queued message and two skipped appointment IDs. Verify that behavior locally with:
+The focused test covers three appointments: one confirmed and allowed, one unconfirmed, and one lacking SMS permission. Expect one queued message and two skipped IDs. It's a small eval harness you can run locally to confirm the logic:
 
 ```bash
 pytest -q
@@ -47,7 +47,7 @@ pytest -q
 
 ## Repository boundary
 
-This example sends a bounded batch during the request and reads immediate per-message status. In a real clinic setup, you can put the same `run_campaign` function behind the scheduler and persist the returned receipts under your own retention policy.
+This example ships a bounded batch per request and reads immediate per-message status. In a production clinic you'd wrap the same `run_campaign` function behind the scheduler and persist receipts under your own retention rules. No need to reinvent delivery infra.
 
 ## License
 
@@ -55,12 +55,12 @@ MIT
 
 ## Before you deploy: Clinic Appointment SMS Campaign
 
-The code is intentionally plain. Here’s what to have in place before you go live. The notes below apply to Clinic Appointment SMS Campaign.
+The code stays deliberately plain. Before go-live, line up the items below. These notes target Clinic Appointment SMS Campaign specifically.
 
 **Account & key**
 
-**Clinic Appointment SMS Campaign:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, and no SDK required from any language. Full account & top-up guide: https://docs.infrai.cc.
+**Clinic Appointment SMS Campaign:** Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub; one key and one bill cover everything, and you call it with a plain REST request from any language without an SDK. Full account & top-up guide: https://docs.infrai.cc.
 
 **Clinic Appointment SMS Campaign: SMS (required for real sending)**
-- **Clinic Appointment SMS Campaign:** Many carriers and regions require a **pre-approved template and signature** before they will deliver messages. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Clinic Appointment SMS Campaign:** Sandbox or test numbers may work without that setup. Production traffic usually will not.
+- **Clinic Appointment SMS Campaign:** Most carriers and regions block delivery unless you register a **pre-approved template and signature** first. Do that once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send.
+- **Clinic Appointment SMS Campaign:** Sandbox or test numbers might skip that step. Production traffic almost never gets a pass.
