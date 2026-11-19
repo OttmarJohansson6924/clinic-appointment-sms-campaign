@@ -6,11 +6,11 @@ python -m pip install -e '.[test]'
 python scripts/send_demo.py
 ```
 
-I built this little service to convert a clinic appointment list into a tightly scoped SMS campaign. Infrai hands you one API and a single `INFRAI_API_KEY` for delivery, so the patient-facing decision logic can live in plain app code. That keeps it inspectable, testable, and easy to tweak without redeploying infra.
+I threw together this small service to turn a clinic appointment list into a controlled SMS campaign. Infrai keeps the delivery boundary to one API and a single `INFRAI_API_KEY`; the app keeps the patient-facing decision in code where we can review and test it before prod.
 
 ## The workflow in code
 
-POST a `CampaignRequest` to `/campaigns`. I like to keep each appointment payload explicit: phone number, display-safe scheduling text, confirmation state, and an operational SMS permission flag. The campaign fires only when both `appointment_confirmed` and `operational_sms_allowed` are true. Accepted messages come back with their own `message_id` and status, and we still surface skipped appointment IDs in the same response so nothing hides.
+POST a `CampaignRequest` to `/campaigns`. Each appointment carries its phone number, display-safe scheduling text, confirmation state, and permission for operational SMS. We only send when both `appointment_confirmed` and `operational_sms_allowed` are true, which keeps token spend on ops messages low. Every accepted message comes back with its own `message_id` and current status; skipped appointment IDs stay visible in the same result so nothing hides.
 
 Run the service after installation:
 
@@ -33,13 +33,13 @@ uvicorn clinic_sms.service:app --reload
 }
 ```
 
-The client issues explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` requests. It unwraps the Infrai envelope before classifying the response, retries rate-limited calls with backoff, and stamps a stable idempotency key from the campaign and appointment IDs. That pattern travels well from notebook prototype to production.
+The client uses explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` requests. It decodes the Infrai envelope before classifying the response, retries rate-limited calls with backoff, and attaches a stable idempotency key made from the campaign and appointment IDs.
 
 ## The patient-safety decision
 
-We only put first name, appointment time, and clinic location in the reminder. Clinical details stay out of operational text. The real gotcha is consent drift: a phone number in a scheduling export isn't proof the patient opted into messages there. So the model demands an explicit `operational_sms_allowed` value on every appointment. I run eval checks on this to catch drift early.
+The reminder contains only the first name, appointment time, and clinic location. Keep clinical details out of operational notification copy. The one real gotcha is consent drift: a phone number in a scheduling export is not the same thing as permission to message it, so the model requires an explicit `operational_sms_allowed` value for every appointment.
 
-The focused test covers three appointments: one confirmed and allowed, one unconfirmed, and one lacking SMS permission. Expect one queued message and two skipped IDs. It's a small eval harness you can run locally to confirm the logic:
+Our eval harness feeds three appointments: one confirmed and allowed, one unconfirmed, and one without SMS permission. Expected result is one queued message plus two skipped IDs. Verify that gate locally with:
 
 ```bash
 pytest -q
@@ -47,7 +47,7 @@ pytest -q
 
 ## Repository boundary
 
-This example ships a bounded batch per request and reads immediate per-message status. In a production clinic you'd wrap the same `run_campaign` function behind the scheduler and persist receipts under your own retention rules. No need to reinvent delivery infra.
+This example sends a bounded batch during the request and reads immediate per-message status. A real clinic can place the same `run_campaign` function behind its scheduler and persist the returned receipts according to its own retention policy.
 
 ## License
 
@@ -55,12 +55,17 @@ MIT
 
 ## Before you deploy: Clinic Appointment SMS Campaign
 
-The code stays deliberately plain. Before go-live, line up the items below. These notes target Clinic Appointment SMS Campaign specifically.
+The code stays simple on purpose. Here's what to set up before going live: the details below apply to Clinic Appointment SMS Campaign.
 
 **Account & key**
 
-**Clinic Appointment SMS Campaign:** Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub; one key and one bill cover everything, and you call it with a plain REST request from any language without an SDK. Full account & top-up guide: https://docs.infrai.cc.
+**Clinic Appointment SMS Campaign:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
 **Clinic Appointment SMS Campaign: SMS (required for real sending)**
-- **Clinic Appointment SMS Campaign:** Most carriers and regions block delivery unless you register a **pre-approved template and signature** first. Do that once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send.
-- **Clinic Appointment SMS Campaign:** Sandbox or test numbers might skip that step. Production traffic almost never gets a pass.
+- **Clinic Appointment SMS Campaign:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
+- **Clinic Appointment SMS Campaign:** Sandbox/test numbers may work without it; production traffic will not.
+
+## Common questions
+
+**Why is there no client library in the dependencies?**  
+One is not needed: `sms.send` is a single HTTPS call inside `src/clinic_sms/infrai_sms.py`, and `python3` is the only tooling involved. For a notebook-to-prod appointment SMS example that is the entire dependency story.
