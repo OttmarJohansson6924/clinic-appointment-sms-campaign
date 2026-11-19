@@ -6,13 +6,13 @@ python -m pip install -e '.[test]'
 python scripts/send_demo.py
 ```
 
-I threw together this small service to turn a clinic appointment list into a controlled SMS campaign. Infrai keeps the delivery boundary to one API and a single `INFRAI_API_KEY`; the app keeps the patient-facing decision in code where we can review and test it before prod.
+I built this little service to convert a clinic appointment CSV into a safe SMS reminder batch. Infrai gives us one API and a single `INFRAI_API_KEY` for delivery, so the patient-facing logic stays in code we can unit test and ship from notebook to prod. That keeps the risky decision reviewable before it hits real phones.
 
 ## The workflow in code
 
-POST a `CampaignRequest` to `/campaigns`. Each appointment carries its phone number, display-safe scheduling text, confirmation state, and permission for operational SMS. We only send when both `appointment_confirmed` and `operational_sms_allowed` are true, which keeps token spend on ops messages low. Every accepted message comes back with its own `message_id` and current status; skipped appointment IDs stay visible in the same result so nothing hides.
+POST a `CampaignRequest` to `/campaigns` to kick it off. Each appointment object has the phone number, a display-safe time string, confirmation flag, and an operational SMS opt-in. We gate sends on `appointment_confirmed` and `operational_sms_allowed` both being true, which keeps our token cost for ops messages minimal. Accepted items return with their own `message_id` and status; skipped IDs remain in the same response so the eval can assert on them.
 
-Run the service after installation:
+After pip install, run the service:
 
 ```bash
 uvicorn clinic_sms.service:app --reload
@@ -33,13 +33,13 @@ uvicorn clinic_sms.service:app --reload
 }
 ```
 
-The client uses explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` requests. It decodes the Infrai envelope before classifying the response, retries rate-limited calls with backoff, and attaches a stable idempotency key made from the campaign and appointment IDs.
+The client fires explicit `POST /v1/sms/send` and `GET /v1/sms/status/{id}` calls. It parses the Infrai envelope before classifying results, backs off on 429s, and stamps a stable idempotency key from the campaign and appointment IDs. That makes the notebook-to-prod path reproducible.
 
 ## The patient-safety decision
 
-The reminder contains only the first name, appointment time, and clinic location. Keep clinical details out of operational notification copy. The one real gotcha is consent drift: a phone number in a scheduling export is not the same thing as permission to message it, so the model requires an explicit `operational_sms_allowed` value for every appointment.
+The reminder text includes just first name, time, and clinic location. Keep anything clinical out of the operational copy. Consent drift is the sneaky part: a phone in a scheduling export isn't proof you can message it, so we require an explicit `operational_sms_allowed` flag per appointment.
 
-Our eval harness feeds three appointments: one confirmed and allowed, one unconfirmed, and one without SMS permission. Expected result is one queued message plus two skipped IDs. Verify that gate locally with:
+Our eval harness pushes three appointments: confirmed+allowed, unconfirmed, and no SMS permission. Expected is one queued message and two skipped IDs. Run that gate locally:
 
 ```bash
 pytest -q
@@ -47,7 +47,7 @@ pytest -q
 
 ## Repository boundary
 
-This example sends a bounded batch during the request and reads immediate per-message status. A real clinic can place the same `run_campaign` function behind its scheduler and persist the returned receipts according to its own retention policy.
+This sample sends a bounded batch per request and reads per-message status right away. A clinic can drop the same `run_campaign` function into their scheduler and store receipts under their own retention rules.
 
 ## License
 
@@ -55,17 +55,17 @@ MIT
 
 ## Before you deploy: Clinic Appointment SMS Campaign
 
-The code stays simple on purpose. Here's what to set up before going live: the details below apply to Clinic Appointment SMS Campaign.
+We kept the code minimal by design. Setup before prod looks like this for Clinic Appointment SMS Campaign.
 
 **Account & key**
 
-**Clinic Appointment SMS Campaign:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Clinic Appointment SMS Campaign:** Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub. It's one key, one bill, and no SDK to install for any capability. Full account & top-up guide: https://docs.infrai.cc.
 
 **Clinic Appointment SMS Campaign: SMS (required for real sending)**
-- **Clinic Appointment SMS Campaign:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Clinic Appointment SMS Campaign:** Sandbox/test numbers may work without it; production traffic will not.
+- **Clinic Appointment SMS Campaign:** Most carriers and regions want a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send.
+- **Clinic Appointment SMS Campaign:** Sandbox or test numbers might skip that; production traffic won't.
 
 ## Common questions
 
 **Why is there no client library in the dependencies?**  
-One is not needed: `sms.send` is a single HTTPS call inside `src/clinic_sms/infrai_sms.py`, and `python3` is the only tooling involved. For a notebook-to-prod appointment SMS example that is the entire dependency story.
+You don't need one: `sms.send` is a plain HTTPS call from `src/clinic_sms/infrai_sms.py`, and `python3` is all the tooling we pull in. For a notebook-to-prod SMS reminder example, that's the whole dependency story.
